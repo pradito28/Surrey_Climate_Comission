@@ -1,0 +1,170 @@
+---
+title: "Surrey Climate Commission"
+author: "Prado"
+date: "2023-02-05"
+output:
+  github_document: default
+  pdf_document: default
+  html_document: default
+---
+
+Read the data from the UK Local authority
+```{r}
+datos<-read.csv("C:/Users/pradi/OneDrive/Desktop/ESG/uk-local-authority-ghg-emissions-2020-dataset.csv",header = T,sep=",")
+head(datos)
+str(datos)
+```
+```{r}
+colnames(datos)<-c("Country","Country_Code","Region","Region_Code","Second_Tier_Authority",
+                    "Local_Authority","Local_Authority_Code","Calendar_Year","LA_GHG_Sector",
+                     "LA_GH_SubSector","Greenhouse_Gas","Territorial_Emissions_Kt_Co2",
+                    "CO2_Emissions_Within_LA_Scope_KtCO2e",
+                     "Mid_Year_Population_Thousands","Area_Km2")
+
+```
+###Analysis of Missing Data 
+
+1) Filtering data for Surrey. I take the "Second Tier Authority" at Surrey Level data set and analysis missing data in the CO2 Emissions data. 
+
+```{r}
+library(dplyr)
+
+surreyData<-datos%>%filter(Second_Tier_Authority=="Surrey")%>%select(Second_Tier_Authority,Local_Authority,Calendar_Year,LA_GHG_Sector,LA_GH_SubSector,Territorial_Emissions_Kt_Co2,CO2_Emissions_Within_LA_Scope_KtCO2e,Mid_Year_Population_Thousands,Area_Km2)
+
+str(surreyData)
+#df_status(surreyData)
+
+```
+There are no missing values or zeros so the database seems tidy.
+
+
+2) aggregate total accumulated CO2 Emissions for each Second Tier Authority cross all the years
+Give me Surrey's position ranked from top emiters to down
+
+```{r}
+library(ggplot2)
+ordered<-datos%>%filter(Calendar_Year==2020, !(Second_Tier_Authority %in% c("Scotland","Wales","Northern Ireland")) )%>%group_by(Second_Tier_Authority)%>%summarise(Total=sum(Territorial_Emissions_Kt_Co2))%>%arrange(desc(Total))%>%mutate(ranked_LA=rank(-Total,))
+
+Surrey_ranking<-subset(ordered[,c("Second_Tier_Authority","Total","ranked_LA")],Second_Tier_Authority=="Surrey")
+Surrey_ranking
+
+ggplot(head(ordered,20), aes(x=reorder(Second_Tier_Authority,-Total), y=Total,fill=Second_Tier_Authority))+geom_bar(stat="identity")+
+  scale_x_discrete(breaks = levels(ordered$Second_Tier_Authority))+
+       xlab("Second Authority Level") + 
+       ylab ("Total CO2 emissions") 
+
+
+```
+
+
+
+Aggregate Emissions per Second tier Authority per Years 2018, 2019 and 2020
+
+```{r}
+emission_sector<-datos%>%filter(Calendar_Year %in% c(2018,2019,2020),Second_Tier_Authority=="Surrey")%>%
+               group_by(Calendar_Year,Second_Tier_Authority,LA_GHG_Sector)%>%
+               summarise(Total_CO2=sum(Territorial_Emissions_Kt_Co2))  
+emission_sector
+
+datos%>%filter(Calendar_Year %in% c(2018,2019,2020),Second_Tier_Authority=="Surrey")%>%
+               group_by(Calendar_Year)%>%
+               summarise(Total_CO2=sum(Territorial_Emissions_Kt_Co2)) 
+
+```
+
+Plot the difference in CO2 emitted per GHG Sector for the three years 2018, 2019,2020
+
+```{r}
+femission_sector<-emission_sector%>%filter(LA_GHG_Sector %in% c("Industry", "Commercial","Agriculture","Domestic","Transport","LULUCF"))%>% mutate(year=factor(Calendar_Year), FLA_GHG_Sector=factor(LA_GHG_Sector))
+
+ggplot(femission_sector,aes(x=year,y=Total_CO2,group=FLA_GHG_Sector,color=FLA_GHG_Sector,alpha=1))+geom_line(size=2)+
+    theme_classic()+
+    geom_point( size = 2)+ geom_label(aes(label = round(Total_CO2,1)), 
+             size = 3, 
+             label.padding = unit(0.1, "lines"), 
+             label.size = 0.0)
+
+library(ggplot2)
+ggplot(femission_sector,aes(x=FLA_GHG_Sector,y=Total_CO2,fill=year))+
+   geom_bar(stat="identity", position = "dodge")+  
+  geom_label(aes(label = round(Total_CO2,0)),colour = "black", size = 3,vjust = 0, position = position_dodge(1))+labs(title="Surrey Sector CO2 Emissions 2018-2020", x="Sector",y="Total CO2 Emissions",colour = "Cylinders", caption = "(based on data from  ONS Local Authority CO2 emissions estimates 2005-2020 (kt CO2) )")+theme_classic()+scale_fill_brewer()
+
+
+
+
+```
+
+# total CO2 aggregated by Year and energy type (LA_GHG_Subsector), 
+```{r}
+#Filtramos los datos para Surrey
+Energy_Type<-surreyData%>%filter(Calendar_Year %in% c(2018,2019,2020))%>%group_by(Calendar_Year,LA_GHG_Sector,LA_GH_SubSector)%>%summarise(Total_energy_Type=round(sum(Territorial_Emissions_Kt_Co2),2))
+
+#Create a new variable with the type of Energy consumed, Electricity, Gas, Fuel or Others
+
+Energy_filtered<-Energy_Type%>%mutate(electricity_type=ifelse(grepl("Electricity",LA_GH_SubSector)==TRUE,"Electricity",
+                                            ifelse(grepl("Gas",LA_GH_SubSector)==TRUE,"Gas", 
+                                                   ifelse(LA_GH_SubSector %in% c("Road Transport (A roads)",  "Road Transport (Minor roads)","Road Transport (Motorways)"),"Fuel", ifelse(grepl("'Other'",LA_GH_SubSector)==TRUE,"Others_1","Others_2" )))))
+
+Energy_filtered
+
+#AGroup by Sector so we drop the subsectors.
+
+Energy_aggregated<-Energy_filtered%>%group_by(Calendar_Year,LA_GHG_Sector,electricity_type)%>%summarise(Total=sum(Total_energy_Type))
+
+
+#Finally, Agregamos por Year y por Tipo de electricidad. It coincides with the report!
+energ_type_agg<-aggregate(Total~as.factor(Calendar_Year)+as.factor(electricity_type),data =Energy_aggregated,sum)
+
+
+
+
+```
+
+
+```{r}
+#Using Separate function we can create a better variable as above but faster and more efficiently and accurate
+library(tidytable)
+
+enerFilt<-Energy_Type%>%separate(LA_GH_SubSector,into = c("GHG_Sector","Energy_Type"),sep=" ")
+head(enerFilt)
+
+EnerAgg<-enerFilt%>%group_by(Calendar_Year,LA_GHG_Sector,Energy_Type)%>%summarise(Total=sum(Total_energy_Type))
+EnerAgg
+
+Energy_agg<-EnerAgg%>%filter(Energy_Type %in% c("Electricity","Gas","'Other'","Transport"))%>%group_by(Energy_Type,Calendar_Year)%>%summarise(Total_CO2_EnergyType=sum(Total,na.rm=T))
+Energy_agg
+
+##Create a ggplot
+
+ggplot(Energy_agg,aes(x=Energy_Type,y=Total_CO2_EnergyType,fill=as.factor(Calendar_Year)))+
+   geom_bar(stat="identity", position = "dodge")+ labs(title="Surrey CO2 Emissions by Energy Type 2018-2020", x="Energy Type",y="Total CO2 Emissions",colour = "Cylinders", caption = "(based on data from  ONS Local Authority CO2 emissions estimates 2005-2020 (kt CO2)", fill="Year")+ 
+  geom_label(aes(label = round(Total_CO2_EnergyType,0)),colour = "black", size = 3,vjust = 0, position = position_dodge(1))+theme_classic()+scale_fill_brewer()
+
+
+```
+
+
+
+#Surrey Emission by District and Borough area
+
+```{r}
+distEmissions<-surreyData%>%filter(Calendar_Year %in% c(2020))%>%group_by(Calendar_Year,Local_Authority)%>%summarise(Total_CO2=sum(Territorial_Emissions_Kt_Co2))
+
+ggplot(distEmissions,aes(x=Total_CO2,y=reorder(Local_Authority,Total_CO2)))+
+   geom_bar(stat="identity",color="blue", fill="blue")+  labs(title="Surrey CO2 Emissions by Local Authority 2020 (Total = 5494 KtCO2)", x="Total CO2 Emissions",y="Local Authority",colour = "Cylinders", caption = "(based on data from  ONS Local Authority CO2 emissions estimates 2005-2020 (kt CO2))", fill="Local Authority")+ 
+  geom_label(aes(label = round(Total_CO2,0)),colour = "black", size = 3,vjust = 0)+theme_classic()
+
+```
+```{r}
+distEmissionsTogether<-surreyData%>%filter(Calendar_Year %in% c(2018,2020))%>%group_by(Calendar_Year,Local_Authority)%>%summarise(Total_CO2=sum(Territorial_Emissions_Kt_Co2))
+
+
+ggplot(distEmissionsTogether,aes(x=Total_CO2,y=reorder(Local_Authority,Total_CO2),fill=Calendar_Year))+
+   geom_bar(stat="identity", position = position_dodge(width=.9))+ 
+  geom_label(aes(label = round(Total_CO2,0)),colour = "white", size = 3,vjust = 0, position = position_dodge(1))+labs(title="Surrey LA CO2 Emissions 2020 vs. 2018", x="Total CO2",y="Local Authority",colour = "Year")+guides(fill = FALSE) +theme_classic()
+
+
+
+
+```
+
